@@ -12,15 +12,15 @@ def process_csv(csv_file_path, model_name):
     try:
         with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
             reader = csv.reader(csvfile)
-            next(reader) #skip header if one exists
+            next(reader, None)  # Skip header if one exists
             
             for row in tqdm(reader, desc=f"Processing {category}", unit=" rows"):
                 if len(row) != 6:
                     print(f"Skipping row due to incorrect format: {row}")
                     continue
-                question = row[0]
-                options = row[1:5]
-                expected_answer = row[5].strip()  # Standardize expected answer
+                
+                question, *options, expected_answer = row
+                expected_answer = expected_answer.strip().upper()  # Standardize expected answer
 
                 # Create the full prompt for the LLM
                 prompt = f"Question: {question}\nOptions:\nA. {options[0]}\nB. {options[1]}\nC. {options[2]}\nD. {options[3]}\nAnswer (choose A, B, C, or D): "
@@ -28,39 +28,21 @@ def process_csv(csv_file_path, model_name):
                 start_time = time.time()
                 try:
                     response = ollama.chat(model=model_name, messages=[{'role': 'user', 'content': prompt}])
-                    llm_answer = response['message']['content'].strip().upper() # Standardize LLM answer
+                    llm_answer = response['message']['content'].strip().upper()  # Standardize LLM answer
                 except Exception as e:
-                     print(f"Error communicating with Ollama: {e}")
-                     llm_answer = "ERROR"
-                     computation_time = -1
-                     correct = -1
-                     data_rows.append([model_name, category, question, expected_answer, llm_answer, computation_time, correct])
-                     continue
+                    print(f"Error communicating with Ollama: {e}")
+                    llm_answer = "ERROR"
+                    computation_time = -1
+                    correct = -1
+                    data_rows.append([model_name, category, question, expected_answer, llm_answer, computation_time, correct])
+                    continue
+                
                 end_time = time.time()
                 computation_time = end_time - start_time
                 
-                # Logic for matching the answer 
-                correct = 0
-                if "A" in llm_answer:
-                    llm_answer_letter = "A"
-                elif "B" in llm_answer:
-                    llm_answer_letter = "B"
-                elif "C" in llm_answer:
-                    llm_answer_letter = "C"
-                elif "D" in llm_answer:
-                    llm_answer_letter = "D"
-                else:
-                    llm_answer_letter = "ERROR"
-
-                if llm_answer_letter == "A" and "A" == expected_answer:
-                    correct = 1
-                elif llm_answer_letter == "B" and "B" == expected_answer:
-                    correct = 1
-                elif llm_answer_letter == "C" and "C" == expected_answer:
-                    correct = 1
-                elif llm_answer_letter == "D" and "D" == expected_answer:
-                    correct = 1
-
+                # Determine if the LLM's answer is correct
+                llm_answer_letter = llm_answer if llm_answer in {"A", "B", "C", "D"} else "ERROR"
+                correct = int(llm_answer_letter == expected_answer)
 
                 data_rows.append([model_name, category, question, expected_answer, llm_answer, computation_time, correct])
 
