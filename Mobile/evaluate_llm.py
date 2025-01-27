@@ -1,81 +1,106 @@
-import csv
-import subprocess
-import time
 import os
+import csv
+import time
+import ollama
+from tqdm import tqdm
+import argparse
 
-def run_llm(question, options):
-    """Runs the LLM and returns the answer and computation time."""
+def process_csv(csv_file_path, model_name):
+    """Processes a single CSV file and returns data for analysis."""
+    category = os.path.splitext(os.path.basename(csv_file_path))[0]
+    data_rows = []
+
     try:
-        start_time = time.time()
-        # Construct the prompt.  Adjust as needed for your LLM and prompt engineering.
-        prompt = f"""Question: {question}\nOptions: {options}\nAnswer:"""
+        with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # Skip header if one exists
 
-        #  Execute the ollama command.  Replace with your actual ollama command.
-        #  This example assumes you have a model named "my-awesome-model"  and are using the default parameters.  Adjust the command to fit your setup.
-        process = subprocess.run(
-            ["ollama", "run", "my-awesome-model", "--input", prompt],
-            capture_output=True, text=True, check=True
-        )
-        answer = process.stdout.strip()  #Remove leading/trailing whitespace
-        # answer = "NULL" #added for testing purposes
-        end_time = time.time()
-        computation_time = end_time - start_time
-        return answer, computation_time
-    except subprocess.CalledProcessError as e:
-        print(f"Error running ollama: {e}")
-        return None, None
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return None, None
+            for row in tqdm(reader, desc=f"Processing {category}", unit=" rows"):
+                if len(row) != 6:
+                    print(f"Skipping row due to incorrect format: {row}")
+                    continue
+                question = row[0]
+                options = row[1:5]
+                expected_answer = row[5].strip()  # Standardize expected answer
 
+                # Create the full prompt for the LLM
+                prompt = f"Question: {question}\nOptions:\nA. {options[0]}\nB. {options[1]}\nC. {options[2]}\nD. {options[3]}\nAnswer (choose A, B, C, or D): "
 
-def process_csv_files(input_dir, output_file, llm_model):
-    """Processes all CSV files in the input directory."""
-
-    with open(output_file, 'w', newline='', encoding='utf-8') as outfile:
-        fieldnames = ['llm_model', 'category', 'question_asked', 'expected_answer', 'recieved_answer', 'computation_time', 'correct']
-        writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for filename in os.listdir(input_dir):
-            if filename.endswith(".csv"):
-                filepath = os.path.join(input_dir, filename)
-                category = os.path.splitext(filename)[0]  # Extract filename without .csv
+                start_time = time.time()
                 try:
-                    with open(filepath, 'r', encoding='utf-8') as infile:
-                        reader = csv.DictReader(infile)
-                        for row in reader:
-                            question = row['question']
-                            options = [row['option 1'], row['option 2'], row['option 3'], row['option 4']]
-                            expected_answer = row['answer']
-
-                            answer, computation_time = run_llm(question, options)
-
-                            correct = 1 if answer.lower() == expected_answer.lower() else 0
-                            if answer is None:
-                                correct = -1
-                                computation_time = 0 # Or another representation for error
-
-
-                            writer.writerow({
-                                'llm_model': llm_model,
-                                'category': category,
-                                'question_asked': question,
-                                'expected_answer': expected_answer,
-                                'recieved_answer': answer if answer else "Error",
-                                'computation_time': computation_time,
-                                'correct': correct
-                            })
-
+                    response = ollama.chat(model=model_name, messages=[{'role': 'user', 'content': prompt}])
+                    llm_answer = response['message']['content'].strip().upper() # Standardize LLM answer
                 except Exception as e:
-                    print(f"Error processing file {filename}: {e}")
+                     print(f"Error communicating with Ollama: {e}")
+                     llm_answer = "ERROR"
+                     computation_time = -1
+                     correct = -1
+                     data_rows.append([model_name, category, question, expected_answer, llm_answer, computation_time, correct])
+                     continue
+                end_time = time.time()
+                computation_time = end_time - start_time
+                
+                # Logic for matching the answer 
+                correct = 0
+                if "A" in llm_answer:
+                    llm_answer_letter = "A"
+                elif "B" in llm_answer:
+                    llm_answer_letter = "B"
+                elif "C" in llm_answer:
+                    llm_answer_letter = "C"
+                elif "D" in llm_answer:
+                    llm_answer_letter = "D"
+                else:
+                    llm_answer_letter = "ERROR"
+
+                if llm_answer_letter == "A" and "A" == expected_answer:
+                    correct = 1
+                elif llm_answer_letter == "B" and "B" == expected_answer:
+                    correct = 1
+                elif llm_answer_letter == "C" and "C" == expected_answer:
+                    correct = 1
+                elif llm_answer_letter == "D" and "D" == expected_answer:
+                    correct = 1
 
 
+                data_rows.append([model_name, category, question, expected_answer, llm_answer, computation_time, correct])
 
-# Configuration
-input_directory = "data"  # Replace with your input directory
-output_csv_file = "output.csv"
-llm_model_name = "gemma:2b"  # Replace with your LLM model name
+    except Exception as e:
+        print(f"Error processing file {csv_file_path}: {e}")
+    
+    return data_rows
 
-#Run the processing
-process_csv_files(input_directory, output_csv_file, llm_model_name)
+
+def main():
+    """Main function to process CSV files and write results."""
+    parser = argparse.ArgumentParser(description="Evaluate LLM on CSV files.")
+    parser.add_argument("--model_name", required=True, help="Name of the Ollama model to use.")
+    parser.add_argument("--output_csv_file", default="llm_eval_results.csv", help="Output CSV file name.")
+
+    args = parser.parse_args()
+
+    csv_folder = "./data"  # Replace with your actual folder path
+    model_name = args.model_name
+    output_csv_file = args.output_csv_file
+    header = ["llm_model", "category", "question_asked", "expected_answer", "received_answer", "computation_time", "correct"]
+
+    all_results = []
+
+    # Get all CSV files
+    for filename in os.listdir(csv_folder):
+        if filename.endswith(".csv"):
+            csv_file_path = os.path.join(csv_folder, filename)
+            results = process_csv(csv_file_path, model_name)
+            all_results.extend(results)
+
+    # Write to CSV
+    with open(output_csv_file, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(header)
+        writer.writerows(all_results)
+
+    print(f"Results written to {output_csv_file}")
+
+
+if __name__ == "__main__":
+    main()
